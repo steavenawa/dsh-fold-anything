@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="Fold sidebar entries">
+  <rect x="5" y="9" width="54" height="46" rx="9" fill="#0f172a" stroke="#334155" stroke-width="2"/>
+  <rect x="11" y="17" width="9" height="30" rx="3" fill="#1d4ed8" opacity="0.6"/>
+  <rect x="25" y="17" width="28" height="5" rx="2.5" fill="#60a5fa"/>
+  <rect x="25" y="26" width="22" height="5" rx="2.5" fill="#64748b"/>
+  <rect x="25" y="35" width="16" height="5" rx="2.5" fill="#64748b"/>
+  <path d="M38 49.5 44 43.5 50 49.5" fill="none" stroke="#93c5fd" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

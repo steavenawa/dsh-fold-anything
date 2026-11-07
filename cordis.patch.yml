@@ -1,0 +1,18 @@
+# 折叠一切 (Fold anything) bundle patch.
+#
+# One installable bundle, two plugins:
+#
+# - `fold-sidebar` mounts the package root. Its Host half is empty, and the
+#   package's `dsh.client` declaration puts the shared browser bundle into the
+#   roster; that bundle registers the sidebar fold controls.
+# - `fold-views` mounts the `./views` subpath plugin; it owns the conversation
+#   view-tab fold controls' display metadata and Host row.
+#
+# The browser bundle is one module (one package = one browser module), so both
+# rows are served by the same client code and neither loads a second copy.
+- insert:
+    - id: fold-sidebar
+      name: 'dsh-fold-anything'
+
+    - id: fold-views
+      name: 'dsh-fold-anything/views'

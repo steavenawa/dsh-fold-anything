@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Fold · sidebar entries",
+    "description": "Fold chosen left-sidebar entries into the More menu, with switches and a choice that survives reloads. This bundle also ships the Fold · conversation views plugin."
+  }
+}

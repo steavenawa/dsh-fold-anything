@@ -1,0 +1,57 @@
+{
+  "name": "dsh-fold-anything",
+  "version": "0.1.0",
+  "private": true,
+  "description": "折叠一切 (Fold anything): one installable bundle with two plugins — fold left-sidebar entries and conversation view tabs into their More menu.",
+  "type": "module",
+  "author": "Steven Jiang",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/steavenawa/dsh-fold-anything.git"
+  },
+  "homepage": "https://github.com/steavenawa/dsh-fold-anything#readme",
+  "keywords": [
+    "deepseek-harness",
+    "dsh",
+    "dsh-plugin",
+    "sidebar",
+    "fold",
+    "ui"
+  ],
+  "exports": {
+    ".": "./index.js",
+    "./views": "./views/index.js",
+    "./client": "./client.js",
+    "./package.json": "./package.json",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg",
+    "./views/locale/*.json": "./views/locale/*.json",
+    "./views/icon": "./views/icon.svg"
+  },
+  "files": [
+    "index.js",
+    "views/index.js",
+    "client.js",
+    "cordis.patch.yml",
+    "locale/*.json",
+    "views/locale/*.json",
+    "icon.svg",
+    "views/icon.svg",
+    "README.md"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-renderer",
+        "@deepseek-ai/dsh-client-ui-sidebar",
+        "@deepseek-ai/dsh-client-ui-conversation",
+        "@deepseek-ai/dsh-client-locale"
+      ]
+    }
+  }
+}
