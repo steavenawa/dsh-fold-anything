@@ -1,5 +1,9 @@
 # 折叠一切 (Fold anything)
 
+[![ci](https://github.com/steavenawa/dsh-fold-anything/actions/workflows/ci.yml/badge.svg)](https://github.com/steavenawa/dsh-fold-anything/actions/workflows/ci.yml)
+[![npm](https://img.shields.io/npm/v/dsh-fold-anything.svg)](https://www.npmjs.com/package/dsh-fold-anything)
+[![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 One installable DSH bundle that ships two plugins:
 
 | Plugin | Fold target | Controls live in |
@@ -13,11 +17,13 @@ controls, persistence, and panel icons.
 
 ## Install (DSH plugin)
 
-This repository is a DSH profile bundle, not an npm package.
+This package is a DSH profile bundle, published to npm.
 
-- **From GitHub**: install the bundle from the repository spec
-  `github:steavenawa/dsh-fold-anything`, or clone this repository and install the
-  cloned folder (its absolute path) with the DSH plugin manager.
+- **From npm**: install the bundle spec `dsh-fold-anything` (or a pinned
+  version such as `dsh-fold-anything@0.1.0`) with the DSH plugin manager.
+- **From GitHub**: install the repository spec
+  `github:steavenawa/dsh-fold-anything`, or clone this repository and install
+  the cloned folder (its absolute path) with the DSH plugin manager.
 - The bundle inserts two Loader rows — `fold-sidebar` (package root
   `dsh-fold-anything`) and `fold-views` (subpath plugin
   `dsh-fold-anything/views`) — and both plugins then appear in the Plugins
@@ -108,3 +114,20 @@ More.
   `--dsw-alias-*` theme tokens.
 - `locale/*.json` and `views/locale/*.json` supply each plugin's manager title
   and description; `icon.svg` and `views/icon.svg` are original artwork.
+
+## Development
+
+Both halves are plain JavaScript with no build step, so the only tooling is
+Node.js and ESLint.
+
+```sh
+npm install
+npm run lint
+```
+
+`.github/workflows/ci.yml` runs the same lint on every push and pull request.
+
+## License
+
+[MIT](LICENSE) © 2026 Steven Jiang
+

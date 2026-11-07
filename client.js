@@ -214,7 +214,7 @@ window.__ModuleLoader__.load({
         try {
           const text = typeof value === 'function' ? value() : value
           return typeof text === 'string' && text.length > 0 ? text : fallback
-        } catch (err) {
+        } catch {
           return fallback
         }
       }
@@ -223,7 +223,6 @@ window.__ModuleLoader__.load({
         if (ctx === null) return
         let next = []
         try {
-          next = []
           for (const stored of ctx.slots.entriesOfSlot(slotName)) {
             const options = stored.options || {}
             const id = typeof options.id === 'string' ? options.id : undefined
