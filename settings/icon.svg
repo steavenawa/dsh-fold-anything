@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="Fold settings sections">
+  <rect x="9" y="6" width="46" height="52" rx="9" fill="#0f172a" stroke="#334155" stroke-width="2"/>
+  <path d="M18 20h20M18 28h20M18 36h12" stroke="#64748b" stroke-width="3.4" stroke-linecap="round"/>
+  <path d="M18 45h10" stroke="#60a5fa" stroke-width="3.4" stroke-linecap="round"/>
+  <path d="M40 43.5 45 48.5 50 43.5" fill="none" stroke="#93c5fd" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

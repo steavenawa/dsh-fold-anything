@@ -87,6 +87,19 @@ window.__ModuleLoader__.load({
     const BOOT_REPLAY_POLL_MS = 400
     const BOOT_REPLAY_WINDOW_MS = 8000
 
+    /**
+     * Settings navigation fold: this plugin contributes one extra settings page
+     * ("More settings") and folds chosen shipped sections into it. The settings
+     * shell renders its navigation as `nav > button` cells inside a panel that
+     * carries `data-shortcut-modal="settings"`; a hidden cell keeps its DOM (so a
+     * programmatic click can still select that page) and is hidden by the
+     * attribute below.
+     */
+    const SETTINGS_SECTION_ID = 'fold-anything'
+    const SETTINGS_STORAGE_KEY = 'dsh.fold-anything.settings.v1'
+    const SETTINGS_NAV_ATTRIBUTE = 'data-fold-anything-nav-folded'
+    const SETTINGS_PANEL_SELECTOR = '[data-shortcut-modal="settings"]'
+
     /** Copy for both plugins; English is the fallback dictionary. */
     const en = {
       'sidebar.title': 'Sidebar entries',
@@ -95,6 +108,9 @@ window.__ModuleLoader__.load({
       'views.title': 'Conversation views',
       'views.hint': 'Turn a view off to fold its tab into the More menu; turn it on to put it back.',
       'views.empty': 'Nothing is folded.',
+      'settings.title': 'More settings',
+      'settings.hint': 'Turn a section off to fold it into this page; turn it on to put it back in the navigation.',
+      'settings.empty': 'No settings section is folded.',
       settings: 'Settings',
       done: 'Done',
       showAll: 'Show all',
@@ -108,6 +124,9 @@ window.__ModuleLoader__.load({
       'views.title': '会话视图',
       'views.hint': '关闭开关即把该视图标签折叠进「更多」菜单；打开即放回标签栏。',
       'views.empty': '没有折叠的视图。',
+      'settings.title': '更多设置',
+      'settings.hint': '关闭开关即把该设置项收进这里；打开即放回设置导航。',
+      'settings.empty': '没有收起的设置项。',
       settings: '设置',
       done: '完成',
       showAll: '全部显示',
@@ -140,6 +159,13 @@ window.__ModuleLoader__.load({
       '.dsh-fa-reset{padding:4px 8px;border:0;border-radius:6px;background:transparent;color:var(--dsw-alias-brand-primary);font:inherit;font-size:12px;cursor:pointer;}',
       '.dsh-fa-reset:hover{background:var(--dsw-alias-bg-layer-2);}',
       'html[data-fold-anything-sync] [role="menu"]{visibility:hidden!important;pointer-events:none!important;}',
+      '[data-fold-anything-nav-folded]{display:none!important;}',
+      '.dsh-fa-settings{display:flex;flex-direction:column;gap:14px;padding:18px 16px 24px;max-width:620px;}',
+      '.dsh-fa-settings-head{display:flex;align-items:center;justify-content:space-between;gap:12px;}',
+      '.dsh-fa-settings-title{margin:0;color:var(--dsw-alias-label-primary);font-size:15px;font-weight:600;}',
+      '.dsh-fa-settings-hint{margin:0;color:var(--dsw-alias-label-secondary);font-size:12px;line-height:1.45;}',
+      '.dsh-fa-settings-list{display:flex;flex-direction:column;gap:2px;padding:4px;border:1px solid var(--dsw-alias-border-l1);border-radius:10px;}',
+      '.dsh-fa-settings-foot{display:flex;justify-content:flex-end;}',
       '@media (prefers-reduced-motion: reduce){.dsh-fa-switch,.dsh-fa-knob{transition:none;}}',
     ].join('')
 
@@ -946,6 +972,290 @@ window.__ModuleLoader__.load({
         h('div', { className: 'dsh-fa-body', key: 'body' }, body))
     }
 
+    // ---------------------------------------------------------- settings fold
+
+    /** Client context, published for the settings nav helpers. */
+    let settingsPluginCtx = null
+
+    /**
+     * Resolve the current nav label of every registered settings section.
+     * @returns {Map<string, string>} section id → label.
+     */
+    function readSettingsSectionLabels() {
+      const labels = new Map()
+      if (settingsPluginCtx === null) return labels
+      try {
+        for (const stored of settingsPluginCtx.slots.entriesOfSlot('settings.section')) {
+          const options = stored.options || {}
+          const id = typeof options.id === 'string' ? options.id : undefined
+          if (id === undefined) continue
+          let text
+          try {
+            const value = options.label
+            text = typeof value === 'function' ? value() : value
+          } catch {
+            text = undefined
+          }
+          labels.set(id, typeof text === 'string' && text.length > 0 ? text : id)
+        }
+      } catch (err) {
+        console.warn('[fold-anything] could not read the settings sections', err)
+      }
+      return labels
+    }
+
+    /**
+     * Mark the settings nav cells of the folded sections. The cells keep their
+     * DOM (so the page can still select them) and are hidden by CSS.
+     */
+    function applySettingsFoldState() {
+      const panel = document.querySelector(SETTINGS_PANEL_SELECTOR)
+      if (panel === null) return
+      const nav = panel.querySelector('nav')
+      if (nav === null) return
+      const folded = readList(SETTINGS_STORAGE_KEY)
+      const foldedLabels = new Set()
+      if (folded.size > 0) {
+        for (const [id, label] of readSettingsSectionLabels()) {
+          if (id === SETTINGS_SECTION_ID) continue
+          if (folded.has(id)) foldedLabels.add(label)
+        }
+      }
+      for (const button of nav.querySelectorAll('button')) {
+        const label = (button.textContent || '').trim()
+        if (foldedLabels.has(label)) button.setAttribute(SETTINGS_NAV_ATTRIBUTE, '')
+        else button.removeAttribute(SETTINGS_NAV_ATTRIBUTE)
+      }
+    }
+
+    /** Re-run the marking on the next frame (coalesced). */
+    let requestSettingsNavSync = function () {}
+
+    /**
+     * Keep the settings navigation marked while the panel is open. Two
+     * MutationObservers (body for panel mount/unmount, panel for shell
+     * re-renders and locale label changes) re-apply the markers, so a React
+     * render cannot drop them. Any failure just leaves the nav untouched.
+     * @param {object} ctx - Client context.
+     * @returns {() => void} disposer.
+     */
+    function startSettingsNavSync(ctx) {
+      settingsPluginCtx = ctx
+      let frame = 0
+      let panelObserver = null
+      let observedPanel = null
+      const run = () => {
+        frame = 0
+        applySettingsFoldState()
+      }
+      const schedule = () => {
+        if (frame !== 0) return
+        frame = window.requestAnimationFrame(run)
+      }
+      requestSettingsNavSync = schedule
+      const watchPanel = (panel) => {
+        if (panel === observedPanel) return
+        if (panelObserver !== null) {
+          panelObserver.disconnect()
+          panelObserver = null
+        }
+        observedPanel = panel
+        if (panel === null) return
+        panelObserver = new MutationObserver(schedule)
+        panelObserver.observe(panel, { subtree: true, childList: true, characterData: true })
+      }
+      const bodyObserver = new MutationObserver(() => {
+        const panel = document.querySelector(SETTINGS_PANEL_SELECTOR)
+        watchPanel(panel)
+        if (panel !== null) schedule()
+      })
+      bodyObserver.observe(document.body, { childList: true })
+      watchPanel(document.querySelector(SETTINGS_PANEL_SELECTOR))
+      schedule()
+      return () => {
+        settingsPluginCtx = null
+        requestSettingsNavSync = function () {}
+        bodyObserver.disconnect()
+        if (panelObserver !== null) panelObserver.disconnect()
+        if (frame !== 0) window.cancelAnimationFrame(frame)
+        for (const element of document.querySelectorAll('[' + SETTINGS_NAV_ATTRIBUTE + ']')) {
+          element.removeAttribute(SETTINGS_NAV_ATTRIBUTE)
+        }
+      }
+    }
+
+    /**
+     * Select a settings section through the nav cell the shell rendered. A
+     * folded cell is display:none but still responds to a programmatic click, so
+     * the fold page can open a hidden section without any other shell API.
+     * @param {string} label - the section's current nav label.
+     * @returns {boolean} whether a cell was clicked.
+     */
+    function openSettingsSection(label) {
+      const panel = document.querySelector(SETTINGS_PANEL_SELECTOR)
+      if (panel === null) return false
+      const nav = panel.querySelector('nav')
+      if (nav === null) return false
+      const wanted = label.trim()
+      const normalized = wanted.replace(/\s+/g, ' ')
+      let loose = null
+      for (const button of nav.querySelectorAll('button')) {
+        const text = (button.textContent || '').trim()
+        if (text === wanted) {
+          button.click()
+          return true
+        }
+        if (loose === null && text.replace(/\s+/g, ' ') === normalized) loose = button
+      }
+      if (loose !== null) {
+        loose.click()
+        return true
+      }
+      return false
+    }
+
+    /** Settings ledger store: sections and their nav icons. */
+    const settingsSectionStore = createSlotStore('settings.section')
+    const settingsIconStore = createSlotStore('settings.section.icon')
+
+    /**
+     * Navigation icon for this plugin's settings page.
+     * @param {{size?: number}} props - shell icon size.
+     * @returns {import('react').ReactElement} the glyph.
+     */
+    function SettingsFoldIcon(props) {
+      const size = typeof props.size === 'number' ? props.size : 16
+      return h('svg', {
+        width: size,
+        height: size,
+        viewBox: '0 0 16 16',
+        'aria-hidden': 'true',
+        focusable: 'false',
+        style: { display: 'block' },
+      },
+      h('path', {
+        d: 'M2 4.2h12M2 8h12M2 11.8h6',
+        fill: 'none',
+        stroke: 'currentColor',
+        strokeWidth: 1.4,
+        strokeLinecap: 'round',
+      }),
+      h('path', {
+        d: 'M10.4 11.6 12.2 13.4 14 11.6',
+        fill: 'none',
+        stroke: 'currentColor',
+        strokeWidth: 1.4,
+        strokeLinecap: 'round',
+        strokeLinejoin: 'round',
+      }))
+    }
+
+    /**
+     * The "More settings" page: folded settings sections, and the switches that
+     * fold them. Owner props carry only `close` (unused here); the locale seat
+     * supplies `t`.
+     * @param {object} props - owner and locale props.
+     * @returns {import('react').ReactElement} the page.
+     */
+    function SettingsFoldSection(props) {
+      const translate = typeof props.t === 'function' ? props.t : function (key) { return key }
+      const sections = useStore(settingsSectionStore)
+      const icons = useStore(settingsIconStore)
+      const stored = readList(SETTINGS_STORAGE_KEY)
+      const [overrides, setOverrides] = React.useState(() => {
+        const initial = {}
+        for (const id of stored) initial[id] = true
+        return initial
+      })
+      const [settings, setSettings] = React.useState(false)
+
+      const iconById = new Map()
+      for (const icon of icons) iconById.set(icon.id, icon.component)
+
+      const items = []
+      for (const section of sections) {
+        if (section.id === SETTINGS_SECTION_ID) continue
+        const override = overrides[section.id]
+        const folded = override === undefined ? stored.has(section.id) : override === true
+        items.push({ id: section.id, label: section.label, folded })
+      }
+      const foldedItems = items.filter((item) => item.folded)
+
+      const setFolded = (item, folded) => {
+        const next = {}
+        for (const key of Object.keys(overrides)) next[key] = overrides[key]
+        next[item.id] = folded
+        setOverrides(next)
+        writeOne(SETTINGS_STORAGE_KEY, item.id, folded)
+        requestSettingsNavSync()
+      }
+
+      const showAll = () => {
+        writeList(SETTINGS_STORAGE_KEY, new Set())
+        const next = {}
+        for (const item of items) next[item.id] = false
+        setOverrides(next)
+        requestSettingsNavSync()
+      }
+
+      const settingsButton = h('button', {
+        type: 'button',
+        className: 'dsh-fa-gear',
+        'aria-expanded': settings ? 'true' : 'false',
+        onClick() {
+          setSettings((previous) => !previous)
+        },
+      },
+      h('span', null, settings ? translate('done') : translate('settings')))
+
+      const row = (item, withSwitch) => h('button', {
+        key: item.id,
+        type: 'button',
+        role: withSwitch ? 'switch' : undefined,
+        'aria-checked': withSwitch ? (item.folded ? 'false' : 'true') : undefined,
+        className: 'dsh-fa-row',
+        title: item.label,
+        onClick() {
+          if (withSwitch) {
+            setFolded(item, !item.folded)
+            return
+          }
+          openSettingsSection(item.label)
+        },
+      },
+      h(PanelIcon, { key: 'icon', component: iconById.get(item.id) }),
+      h('span', { className: 'dsh-fa-label' }, item.label),
+      withSwitch
+        ? h('span', {
+            key: 'switch',
+            className: 'dsh-fa-switch',
+            'data-on': item.folded ? 'false' : 'true',
+            'aria-hidden': 'true',
+          }, h('span', { className: 'dsh-fa-knob' }))
+        : null)
+
+      const body = settings
+        ? [
+            h('p', { className: 'dsh-fa-settings-hint', key: 'hint' }, translate('settings.hint')),
+            h('div', { className: 'dsh-fa-settings-list', key: 'list' },
+              items.map((item) => row(item, true))),
+            h('div', { className: 'dsh-fa-settings-foot', key: 'foot' },
+              h('button', { type: 'button', className: 'dsh-fa-reset', onClick: showAll }, translate('showAll'))),
+          ]
+        : [
+            foldedItems.length > 0
+              ? h('div', { className: 'dsh-fa-settings-list', key: 'list' },
+                  foldedItems.map((item) => row(item, false)))
+              : h('p', { className: 'dsh-fa-settings-hint', key: 'empty' }, translate('settings.empty')),
+          ]
+
+      return h('div', { className: 'dsh-fa-settings' },
+        h('div', { className: 'dsh-fa-settings-head', key: 'head' },
+          h('h3', { className: 'dsh-fa-settings-title' }, translate('settings.title')),
+          settingsButton),
+        body)
+    }
+
     // ----------------------------------------------------------------- plugin
 
     /**
@@ -955,6 +1265,7 @@ window.__ModuleLoader__.load({
      */
     function apply(ctx) {
       ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'fold-anything: dictionaries')
+      const t = ctx.locale.bind(NS)
 
       ctx.effect(() => {
         // Replace a leftover tag from a crashed instance instead of keeping it:
@@ -975,6 +1286,9 @@ window.__ModuleLoader__.load({
       ctx.effect(() => panelStore.bind(ctx), 'fold-anything: panel icons')
       ctx.effect(() => viewStore.bind(ctx), 'fold-anything: view roster')
       ctx.effect(() => viewActionStore.bind(ctx), 'fold-anything: view menu rows')
+      ctx.effect(() => settingsSectionStore.bind(ctx), 'fold-anything: settings sections')
+      ctx.effect(() => settingsIconStore.bind(ctx), 'fold-anything: settings icons')
+      ctx.effect(() => startSettingsNavSync(ctx), 'fold-anything: settings nav sync')
 
       // Best-effort startup replay: apply the saved fold state without waiting
       // for the user to open a menu. Falls back to the menu-open replay when the
@@ -998,6 +1312,22 @@ window.__ModuleLoader__.load({
         locale: NS,
         inject: () => ({ region: 'views' }),
       }, FoldMenuContent))
+
+      // Settings navigation: one extra page that lists folded sections, plus its
+      // nav icon. The page's switches hide/show the other sections' nav cells.
+      ctx.slots.inject('settings.section', () => ctx.slots.register({
+        name: 'settings.section',
+        id: SETTINGS_SECTION_ID,
+        order: 900,
+        locale: NS,
+        label: () => t('settings.title'),
+      }, SettingsFoldSection))
+
+      ctx.slots.inject('settings.section.icon', () => ctx.slots.register({
+        name: 'settings.section.icon',
+        id: SETTINGS_SECTION_ID,
+        order: 900,
+      }, SettingsFoldIcon))
     }
 
     return { apply, inject }

@@ -4,30 +4,32 @@
 [![npm](https://img.shields.io/npm/v/dsh-fold-anything.svg)](https://www.npmjs.com/package/dsh-fold-anything)
 [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-One installable DSH bundle that ships two plugins:
+One installable DSH bundle that ships three plugins:
 
 | Plugin | Fold target | Controls live in |
 |---|---|---|
 | **折叠 · 侧边栏入口** (`dsh-fold-anything`) | Left-sidebar navigation entries (`sidebar.panellist`) | The sidebar 更多 menu |
 | **折叠 · 会话视图** (`dsh-fold-anything/views`) | Conversation View tabs (`conversation.view`) | The tab row's 「…」 menu |
+| **折叠 · 设置导航** (`dsh-fold-anything/settings`) | Settings sections (`settings.section`) | The **更多设置** settings page |
 
-Both plugins use the shell's own fold state — a launcher or View that is
-unpinned leaves its row and stays reachable from the menu — and add the missing
-controls, persistence, and panel icons.
+The first two use the shell's own fold state — a launcher or View that is
+unpinned leaves its row and stays reachable from the menu. The settings plugin
+contributes a settings page and folds chosen sections out of the navigation into
+that page. All three add the missing controls, persistence, and icons.
 
 ## Install (DSH plugin)
 
 This package is a DSH profile bundle, published to npm.
 
 - **From npm**: install the bundle spec `dsh-fold-anything` (or a pinned
-  version such as `dsh-fold-anything@0.1.0`) with the DSH plugin manager.
+  version such as `dsh-fold-anything@0.1.3`) with the DSH plugin manager.
 - **From GitHub**: install the repository spec
   `github:steavenawa/dsh-fold-anything`, or clone this repository and install
   the cloned folder (its absolute path) with the DSH plugin manager.
-- The bundle inserts two Loader rows — `fold-sidebar` (package root
-  `dsh-fold-anything`) and `fold-views` (subpath plugin
-  `dsh-fold-anything/views`) — and both plugins then appear in the Plugins
-  settings list.
+- The bundle inserts three Loader rows — `fold-sidebar` (package root
+  `dsh-fold-anything`), `fold-views` and `fold-settings` (subpath plugins
+  `dsh-fold-anything/views` and `dsh-fold-anything/settings`) — and each then
+  appears in the Plugins settings list.
 - A newly added bundle may need a DSH restart before its Loader rows activate;
   the browser bundle loads with the page.
 
@@ -54,6 +56,16 @@ This package is a DSH profile bundle, published to npm.
    folded by that width budget keep their own menu rows — this plugin never
    lists them a second time.
 3. Press **完成** to leave settings mode.
+
+### Settings sections
+
+1. Open **Settings** and select **更多设置 / More settings**, the last entry in
+   the settings navigation (an extra page this bundle contributes).
+2. Press **设置**. Every other settings section appears with a switch: turn it
+   **off** to fold that section out of the navigation into this page, **on** to
+   put it back. **全部显示** restores everything.
+3. Leave settings mode. The folded sections are gone from the navigation and
+   listed on this page — click one to open it directly.
 
 A launcher or View is shown in exactly one place in display mode: in the
 sidebar / tab row, or inside its More menu — never both. Settings mode is an
@@ -106,6 +118,23 @@ More.
 - Panel icons are reused from the icons their own plugins register into
   `sidebar.panellist`; each is rendered behind an error boundary, so a hostile
   icon degrades to a neutral placeholder instead of breaking the menu.
+- **Settings fold.** The settings shell renders its navigation itself and offers
+  no fold/group seat, so this plugin contributes one ordinary settings page and
+  hides the chosen nav cells at the DOM level:
+  - A folded cell keeps its DOM (only `display:none`), so the page can still
+    select that section through a programmatic click on the cell — no private
+    shell state is touched.
+  - Cells are matched by their visible nav label (the text the shell renders),
+    which is resolved from the live `settings.section` ledger, so a locale change
+    follows automatically. Two `MutationObserver`s (the body for panel
+    mount/unmount, the panel for re-renders) re-apply the marker, because a React
+    re-render recreates the cells.
+  - If the shipped panel markup changes, the marker simply never applies: the
+    navigation stays untouched, and the page remains a normal settings page whose
+    rows are inert. No error escapes.
+  - Choices are stored in `localStorage` under `dsh.fold-anything.settings.v1`.
+  - Folding is a navigation filter only: a folded page is still mounted when
+    selected and its settings are unchanged.
 
 ## Limits
 
@@ -121,15 +150,20 @@ More.
   manual menu open. A shell-exposed pin service would remove this dependency.
 - Stale ids (a folded panel whose plugin was removed) stay in `localStorage`
   until **全部显示** clears them; they are harmless.
-- **The two plugin rows share one browser module.** A DSH package owns at most
+- **Settings categories (grouping) are not implemented.** The settings shell
+  renders a flat navigation with no group-header seat, so grouping would need
+  injected section headers (a much more fragile DOM layer). Folding sections into
+  the **更多设置** page is the supported-by-this-plugin alternative today.
+- **The three plugin rows share one browser module.** A DSH package owns at most
   one browser module, and only a Loader row addressed by the exact package name
   publishes it: here that is the root row (`折叠 · 侧边栏入口`, package
-  `dsh-fold-anything`). The `折叠 · 会话视图` row (`dsh-fold-anything/views`) is a
-  separate Loader entry with its own title and icon, but it contributes no
-  browser code of its own. Consequences: disabling the root row stops **both**
-  controls even while the views row stays enabled, and disabling the views row
-  only hides its plugin-list entry. Truly independent enable/disable would need
-  two packages, each declaring its own `dsh.client`.
+  `dsh-fold-anything`). The `折叠 · 会话视图` and `折叠 · 设置导航` rows
+  (`dsh-fold-anything/views`, `dsh-fold-anything/settings`) are separate Loader
+  entries with their own titles and icons, but they contribute no browser code of
+  their own. Consequences: disabling the root row stops **all** controls even
+  while the other rows stay enabled, and disabling another row only hides its
+  plugin-list entry. Truly independent enable/disable would need one package per
+  plugin, each declaring its own `dsh.client`.
 
 ## Implementation
 
