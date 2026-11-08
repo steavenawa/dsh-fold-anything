@@ -76,20 +76,32 @@ More.
   starts visible. The plugin replays the saved choice through the shell's own
   `onPinnedChange` callback: at startup (best effort, see below) and again on
   the first manual menu open.
-- **Startup replay.** Right after a page load the plugin mounts each More menu
-  invisibly for two frames, which is the only way the shell exposes its pin
-  callback, then closes it again. The menu is hidden by a temporary
-  `html[data-fold-anything-sync]` rule, so the sync is not visible.
+- **Startup replay.** Right after a page load (about 0.9 s later) the plugin
+  finds the More launchers, mounts each menu invisibly for a moment, and closes
+  it again — mounting is the only way the shell exposes its pin callback. The
+  menu is hidden by a temporary `html[data-fold-anything-sync]` rule until the
+  trigger reports itself closed, so the sync should not be visible.
   - The menu triggers carry no stable class or data attribute, so the plugin
-    resolves them through a fallback chain of selectors that survives shipped
-    markup drift: (1) structural anchors — the sidebar's only `<nav>`, the
-    `[data-sidebar-toggle]` column, `[data-conversation-tabs]` / `[role=tablist]`
-    siblings; (2) the localized trigger label resolved from the shipped `sidebar`
-    / `conversation` locale dictionaries (no hardcoded language); (3) literal
-    Chinese/English labels as a last resort.
+    resolves them through a fallback chain that survives shipped markup drift:
+    - **sidebar More**: (1) the sidebar's only `<nav>`; (2) the column that owns
+      `[data-sidebar-toggle]`; (3) the localized `panels.more` label from the
+      shipped `sidebar` dictionary; (4) the literal labels 更多 / More.
+    - **view tabs More**: (1) the localized `session.moreViews` label from the
+      shipped `conversation` dictionary; (2) the literal labels 更多会话视图 /
+      More conversation views; (3) the sibling of `[data-conversation-tabs]`;
+      (4) the sibling of `[role=tablist]`.
+    - Every layer only accepts a visible `<button aria-haspopup="menu">` whose
+      `aria-expanded` is `false`, so the worst possible drift is toggling another
+      menu popup — never a destructive control.
+  - A menu is hidden for about two frames plus 60 ms; closing retries twice when
+    the trigger still reports itself open, and the whole attempt is capped at
+    0.9 s. Trigger lookup retries for up to 8 s (the View tab row only exists
+    once a Session is open).
   - Any failure — anchor moved, label changed, page not ready, exception — is
     swallowed. The plugin then simply falls back to the original behaviour:
     replay on the first manual menu open. It can never break the menus.
+  - One side effect: each replay clicks the shipped trigger, which records one
+    `sidebar_menu_click` product-analytics event per page load with saved folds.
   - Opt out with `localStorage.setItem('dsh.fold-anything.no-boot-replay.v1', '1')`.
 - Panel icons are reused from the icons their own plugins register into
   `sidebar.panellist`; each is rendered behind an error boundary, so a hostile
@@ -127,9 +139,12 @@ More.
 - `index.js` and `views/index.js` are empty Host `apply`s: the whole capability
   is browser-side.
 - `client.js` registers into `sidebar.panellist.actions` and
-  `conversation.session.header.views.actions` only — no shipped DOM, no other
-  plugin's styles, and React is the only module required. Colors use
-  `--dsw-alias-*` theme tokens.
+  `conversation.session.header.views.actions` only, and React is the only module
+  required; colors use `--dsw-alias-*` theme tokens. The optional startup replay
+  is the one exception to "no shipped DOM": it looks up the two shipped More
+  launchers, clicks them to mount their menus for a moment, and sets a temporary
+  root attribute that hides the menus while it runs. It never edits their
+  markup, their styles, or their state beyond that toggle.
 - `locale/*.json` and `views/locale/*.json` supply each plugin's manager title
   and description; `icon.svg` and `views/icon.svg` are original artwork.
 

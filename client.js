@@ -140,7 +140,6 @@ window.__ModuleLoader__.load({
       '.dsh-fa-reset{padding:4px 8px;border:0;border-radius:6px;background:transparent;color:var(--dsw-alias-brand-primary);font:inherit;font-size:12px;cursor:pointer;}',
       '.dsh-fa-reset:hover{background:var(--dsw-alias-bg-layer-2);}',
       'html[data-fold-anything-sync] [role="menu"]{visibility:hidden!important;pointer-events:none!important;}',
-      'html[data-fold-anything-sync] [role="dialog"][aria-modal="true"]{visibility:hidden!important;pointer-events:none!important;}',
       '@media (prefers-reduced-motion: reduce){.dsh-fa-switch,.dsh-fa-knob{transition:none;}}',
     ].join('')
 
@@ -359,14 +358,30 @@ window.__ModuleLoader__.load({
     }
 
     /**
+     * A clickable, currently closed menu trigger. Requiring `aria-expanded` on
+     * the element keeps the replay from ever clicking something that is not a
+     * toggle-able menu button (and guarantees the close path can read the state
+     * back).
+     * @param {Element | null | undefined} button - candidate.
+     * @returns {boolean} true when the element is safe to click as a menu toggle.
+     */
+    function isMenuTriggerCandidate(button) {
+      if (button === null || button === undefined) return false
+      if (button.getAttribute('aria-haspopup') !== 'menu') return false
+      if (button.getAttribute('aria-expanded') !== 'false') return false
+      return isVisibleElement(button)
+    }
+
+    /**
      * Find a visible button by its accessible name.
      * @param {string} label - aria-label to match.
      * @returns {HTMLButtonElement | null} the button.
      */
     function findMenuButtonByLabel(label) {
-      for (const button of document.querySelectorAll('button[aria-label][aria-haspopup="menu"]')) {
+      const candidates = document.querySelectorAll('button[aria-label][aria-haspopup="menu"][aria-expanded]')
+      for (const button of candidates) {
         if (button.getAttribute('aria-label') !== label) continue
-        if (!isVisibleElement(button)) continue
+        if (!isMenuTriggerCandidate(button)) continue
         return button
       }
       return null
@@ -384,13 +399,13 @@ window.__ModuleLoader__.load({
      * @returns {HTMLButtonElement | null} the trigger, or null.
      */
     function findSidebarMoreTrigger(ctx) {
-      const inNav = document.querySelector('nav[aria-label] button[aria-haspopup="menu"]')
-      if (isVisibleElement(inNav)) return inNav
+      const inNav = document.querySelector('nav[aria-label] button[aria-haspopup="menu"][aria-expanded]')
+      if (isMenuTriggerCandidate(inNav)) return inNav
       const toggle = document.querySelector('[data-sidebar-toggle]')
       const column = toggle !== null ? toggle.parentElement?.parentElement ?? null : null
       if (column !== null) {
-        const inColumn = column.querySelector('button[aria-haspopup="menu"]')
-        if (isVisibleElement(inColumn)) return inColumn
+        const inColumn = column.querySelector('button[aria-haspopup="menu"][aria-expanded]')
+        if (isMenuTriggerCandidate(inColumn)) return inColumn
       }
       const labels = []
       const localized = resolveShippedLabel(ctx, 'sidebar', 'panels.more')
@@ -412,7 +427,7 @@ window.__ModuleLoader__.load({
       const labels = []
       const localized = resolveShippedLabel(ctx, 'conversation', 'session.moreViews')
       if (localized !== undefined) labels.push(localized)
-      labels.push('更多对话视图', 'More conversation views')
+      labels.push('更多会话视图', 'More conversation views')
       for (const label of labels) {
         const button = findMenuButtonByLabel(label)
         if (button !== null) return button
@@ -421,8 +436,8 @@ window.__ModuleLoader__.load({
         const tablist = document.querySelector(selector)
         const row = tablist !== null ? tablist.parentElement : null
         if (row === null) continue
-        const button = row.querySelector('button[aria-haspopup="menu"]')
-        if (isVisibleElement(button)) return button
+        const button = row.querySelector('button[aria-haspopup="menu"][aria-expanded]')
+        if (isMenuTriggerCandidate(button)) return button
       }
       return null
     }
@@ -430,118 +445,165 @@ window.__ModuleLoader__.load({
     /**
      * Mount a More menu for a few frames, then close it: mounting is what runs
      * the controls' replay effect, which pushes the saved fold state into the
-     * shell. {@link SYNC_ATTRIBUTE} keeps the menu invisible while that happens.
-     * @param {HTMLButtonElement} trigger - the menu's launcher.
-     * @param {() => void} done - called once the menu is closed again.
+     * shell. {@link SYNC_ATTRIBUTE} keeps the menu invisible while that happens,
+     * and the visibility is only lifted after the trigger reports itself closed
+     * (with a bounded retry) so a lagging React commit cannot leave the menu
+     * visible.
+     * @param {HTMLButtonElement} trigger - the menu's launcher, a closed toggle.
+     * @param {() => void} done - called once the menu is closed and cleaned up.
+     * @returns {() => void} cancels pending frames/timers and cleans up.
      */
     function replayThroughMenu(trigger, done) {
-      if (trigger.getAttribute('aria-expanded') === 'true') {
-        done()
-        return
-      }
       const doc = document
       const root = doc.documentElement
       const previousFocus = doc.activeElement
-      root.setAttribute(SYNC_ATTRIBUTE, '')
+      const timers = []
+      const frames = []
+      let cancelled = false
       let finished = false
-      const finish = () => {
-        if (finished) return
-        finished = true
+      let cleaned = false
+
+      const later = (callback, ms) => {
+        timers.push(window.setTimeout(() => {
+          if (!cancelled) callback()
+        }, ms))
+      }
+      const frame = (callback) => {
+        frames.push(window.requestAnimationFrame(() => {
+          if (!cancelled) callback()
+        }))
+      }
+      const cleanup = () => {
+        if (cleaned) return
+        cleaned = true
+        for (const id of timers) window.clearTimeout(id)
+        for (const id of frames) window.cancelAnimationFrame(id)
+        root.removeAttribute(SYNC_ATTRIBUTE)
+        if (previousFocus !== null && previousFocus !== doc.body && typeof previousFocus.focus === 'function') {
+          try {
+            previousFocus.focus({ preventScroll: true })
+          } catch (err) {
+            console.warn('[fold-anything] could not restore focus after the replay', err)
+          }
+        }
+        done()
+      }
+      const closeMenu = (attempt) => {
         try {
           if (trigger.getAttribute('aria-expanded') === 'true') trigger.click()
         } catch (err) {
           console.warn('[fold-anything] could not close the replay menu', err)
         }
-        window.setTimeout(() => {
-          root.removeAttribute(SYNC_ATTRIBUTE)
-          if (previousFocus !== null && previousFocus !== doc.body && typeof previousFocus.focus === 'function') {
-            try {
-              previousFocus.focus({ preventScroll: true })
-            } catch (err) {
-              console.warn('[fold-anything] could not restore focus after the replay', err)
-            }
+        later(() => {
+          if (trigger.getAttribute('aria-expanded') === 'true' && attempt < 2) {
+            closeMenu(attempt + 1)
+            return
           }
-          done()
-        }, 60)
+          cleanup()
+        }, 90)
       }
+      const finish = () => {
+        if (finished) return
+        finished = true
+        closeMenu(0)
+      }
+
+      if (trigger.getAttribute('aria-expanded') !== 'false') {
+        cleanup()
+        return () => {}
+      }
+      root.setAttribute(SYNC_ATTRIBUTE, '')
       try {
         trigger.click()
       } catch (err) {
         console.warn('[fold-anything] could not open the replay menu', err)
-        root.removeAttribute(SYNC_ATTRIBUTE)
-        done()
-        return
+        cleanup()
+        return () => {}
       }
-      window.requestAnimationFrame(() => {
-        window.requestAnimationFrame(() => {
-          window.setTimeout(finish, 120)
+      frame(() => {
+        frame(() => {
+          later(finish, 60)
         })
       })
-      window.setTimeout(finish, 1600)
+      later(finish, 900)
+      return () => {
+        cancelled = true
+        cleanup()
+      }
     }
 
     /**
      * Replay the persisted fold state right after startup instead of waiting for
      * the first manual menu open. This is best effort by construction: the shell
      * exposes its pin callback only through menu rows, so each menu is mounted
-     * invisibly for two frames. Every failure (missing trigger, changed markup,
+     * invisibly for a moment. Every failure (missing trigger, changed markup,
      * thrown error, page not ready) is swallowed — the plugin then falls back to
      * replaying on the first manual menu open, exactly like before.
      * @param {object} ctx - Client context.
-     * @returns {() => void} disposer for the pending timers.
+     * @returns {() => void} disposer cancelling timers and any in-flight replay.
      */
     function startBootReplay(ctx) {
-      let disabled
       try {
-        disabled = window.localStorage.getItem(BOOT_REPLAY_DISABLE_KEY) === '1'
-      } catch {
-        disabled = false
-      }
-      if (disabled) return () => {}
-      const startedAt = Date.now()
-      const tasks = []
-      if (readFolded('sidebar').size > 0) {
-        tasks.push({ region: 'sidebar', done: false, deadline: startedAt + BOOT_REPLAY_WINDOW_MS })
-      }
-      if (readFolded('views').size > 0) {
-        tasks.push({ region: 'views', done: false, deadline: startedAt + BOOT_REPLAY_WINDOW_MS })
-      }
-      if (tasks.length === 0) return () => {}
-
-      let cancelled = false
-      let timer = 0
-      let busy = false
-      const schedule = () => {
-        if (cancelled) return
-        if (timer !== 0) window.clearTimeout(timer)
-        timer = window.setTimeout(poll, BOOT_REPLAY_POLL_MS)
-      }
-      const poll = () => {
-        timer = 0
-        if (cancelled || busy) return
-        const current = Date.now()
-        for (const task of tasks) {
-          if (task.done) continue
-          const trigger = task.region === 'views' ? findViewsMoreTrigger(ctx) : findSidebarMoreTrigger(ctx)
-          if (trigger === null) {
-            if (current >= task.deadline) task.done = true
-            continue
-          }
-          task.done = true
-          busy = true
-          replayThroughMenu(trigger, () => {
-            busy = false
-            if (tasks.some((item) => !item.done)) schedule()
-          })
-          return
+        let disabled
+        try {
+          disabled = window.localStorage.getItem(BOOT_REPLAY_DISABLE_KEY) === '1'
+        } catch {
+          disabled = false
         }
-        if (tasks.some((task) => !task.done)) schedule()
-      }
-      timer = window.setTimeout(poll, BOOT_REPLAY_DELAY_MS)
-      return () => {
-        cancelled = true
-        if (timer !== 0) window.clearTimeout(timer)
-        document.documentElement.removeAttribute(SYNC_ATTRIBUTE)
+        if (disabled) return () => {}
+        const startedAt = Date.now()
+        const tasks = []
+        if (readFolded('sidebar').size > 0) {
+          tasks.push({ region: 'sidebar', done: false, deadline: startedAt + BOOT_REPLAY_WINDOW_MS })
+        }
+        if (readFolded('views').size > 0) {
+          tasks.push({ region: 'views', done: false, deadline: startedAt + BOOT_REPLAY_WINDOW_MS })
+        }
+        if (tasks.length === 0) return () => {}
+
+        let cancelled = false
+        let timer = 0
+        let busy = false
+        let cancelActive = null
+        const schedule = () => {
+          if (cancelled) return
+          if (timer !== 0) window.clearTimeout(timer)
+          timer = window.setTimeout(poll, BOOT_REPLAY_POLL_MS)
+        }
+        const poll = () => {
+          timer = 0
+          if (cancelled || busy) return
+          const current = Date.now()
+          for (const task of tasks) {
+            if (task.done) continue
+            const trigger = task.region === 'views' ? findViewsMoreTrigger(ctx) : findSidebarMoreTrigger(ctx)
+            if (trigger === null) {
+              if (current >= task.deadline) task.done = true
+              continue
+            }
+            task.done = true
+            busy = true
+            cancelActive = replayThroughMenu(trigger, () => {
+              cancelActive = null
+              busy = false
+              if (tasks.some((item) => !item.done)) schedule()
+            })
+            return
+          }
+          if (tasks.some((task) => !task.done)) schedule()
+        }
+        timer = window.setTimeout(poll, BOOT_REPLAY_DELAY_MS)
+        return () => {
+          cancelled = true
+          if (timer !== 0) window.clearTimeout(timer)
+          const cancel = cancelActive
+          cancelActive = null
+          if (cancel !== null) cancel()
+          document.documentElement.removeAttribute(SYNC_ATTRIBUTE)
+        }
+      } catch (err) {
+        console.warn('[fold-anything] startup replay skipped', err)
+        return () => {}
       }
     }
 
