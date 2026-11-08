@@ -666,7 +666,9 @@ window.__ModuleLoader__.load({
      * @returns {import('react').ReactElement} the icon cell.
      */
     function PanelIcon(props) {
-      const fallback = h('span', { className: 'dsh-fa-icon-fallback', 'aria-hidden': 'true' })
+      const fallback = props.fallback !== undefined
+        ? props.fallback
+        : h('span', { className: 'dsh-fa-icon-fallback', 'aria-hidden': 'true' })
       const component = props.component
       // Any non-null element type is attempted (function, memo, forwardRef); an
       // invalid type throws inside the boundary and becomes the placeholder.
@@ -1008,22 +1010,48 @@ window.__ModuleLoader__.load({
      * Mark the settings nav cells of the folded sections. The cells keep their
      * DOM (so the page can still select them) and are hidden by CSS.
      */
-    function applySettingsFoldState() {
+    /**
+     * Find the settings panel's section navigation. The panel's own direct child
+     * `<nav>` is preferred; a nested nav is accepted only when it actually holds
+     * buttons, so a future third-party `<nav>` in the header cannot be mistaken
+     * for the section rail.
+     * @returns {HTMLElement | null} the section nav, or null.
+     */
+    function findSettingsNav() {
       const panel = document.querySelector(SETTINGS_PANEL_SELECTOR)
-      if (panel === null) return
-      const nav = panel.querySelector('nav')
+      if (panel === null) return null
+      const direct = panel.querySelector(':scope > nav')
+      if (direct !== null && direct.querySelector('button') !== null) return direct
+      for (const nav of panel.querySelectorAll('nav')) {
+        if (nav.querySelector('button') !== null) return nav
+      }
+      return null
+    }
+
+    /**
+     * Mark the settings nav cells of the folded sections. The cells keep their
+     * DOM (so the page can still select them) and are hidden by CSS. Nothing is
+     * hidden while this plugin's own page is absent from the section ledger: a
+     * hidden cell must always keep a way back.
+     */
+    function applySettingsFoldState() {
+      const nav = findSettingsNav()
       if (nav === null) return
+      const labels = readSettingsSectionLabels()
       const folded = readList(SETTINGS_STORAGE_KEY)
+      const hide = labels.has(SETTINGS_SECTION_ID) && folded.size > 0
       const foldedLabels = new Set()
-      if (folded.size > 0) {
-        for (const [id, label] of readSettingsSectionLabels()) {
+      if (hide) {
+        for (const [id, label] of labels) {
           if (id === SETTINGS_SECTION_ID) continue
           if (folded.has(id)) foldedLabels.add(label)
         }
       }
       for (const button of nav.querySelectorAll('button')) {
-        const label = (button.textContent || '').trim()
-        if (foldedLabels.has(label)) button.setAttribute(SETTINGS_NAV_ATTRIBUTE, '')
+        const shouldHide = hide && foldedLabels.has((button.textContent || '').trim())
+        const isHidden = button.hasAttribute(SETTINGS_NAV_ATTRIBUTE)
+        if (shouldHide === isHidden) continue
+        if (shouldHide) button.setAttribute(SETTINGS_NAV_ATTRIBUTE, '')
         else button.removeAttribute(SETTINGS_NAV_ATTRIBUTE)
       }
     }
@@ -1040,47 +1068,52 @@ window.__ModuleLoader__.load({
      * @returns {() => void} disposer.
      */
     function startSettingsNavSync(ctx) {
-      settingsPluginCtx = ctx
-      let frame = 0
-      let panelObserver = null
-      let observedPanel = null
-      const run = () => {
-        frame = 0
-        applySettingsFoldState()
-      }
-      const schedule = () => {
-        if (frame !== 0) return
-        frame = window.requestAnimationFrame(run)
-      }
-      requestSettingsNavSync = schedule
-      const watchPanel = (panel) => {
-        if (panel === observedPanel) return
-        if (panelObserver !== null) {
-          panelObserver.disconnect()
-          panelObserver = null
+      try {
+        settingsPluginCtx = ctx
+        let frame = 0
+        let panelObserver = null
+        let observedPanel = null
+        const run = () => {
+          frame = 0
+          applySettingsFoldState()
         }
-        observedPanel = panel
-        if (panel === null) return
-        panelObserver = new MutationObserver(schedule)
-        panelObserver.observe(panel, { subtree: true, childList: true, characterData: true })
-      }
-      const bodyObserver = new MutationObserver(() => {
-        const panel = document.querySelector(SETTINGS_PANEL_SELECTOR)
-        watchPanel(panel)
-        if (panel !== null) schedule()
-      })
-      bodyObserver.observe(document.body, { childList: true })
-      watchPanel(document.querySelector(SETTINGS_PANEL_SELECTOR))
-      schedule()
-      return () => {
-        settingsPluginCtx = null
-        requestSettingsNavSync = function () {}
-        bodyObserver.disconnect()
-        if (panelObserver !== null) panelObserver.disconnect()
-        if (frame !== 0) window.cancelAnimationFrame(frame)
-        for (const element of document.querySelectorAll('[' + SETTINGS_NAV_ATTRIBUTE + ']')) {
-          element.removeAttribute(SETTINGS_NAV_ATTRIBUTE)
+        const schedule = () => {
+          if (frame !== 0) return
+          frame = window.requestAnimationFrame(run)
         }
+        requestSettingsNavSync = schedule
+        const watchPanel = (panel) => {
+          if (panel === observedPanel) return
+          if (panelObserver !== null) {
+            panelObserver.disconnect()
+            panelObserver = null
+          }
+          observedPanel = panel
+          if (panel === null) return
+          panelObserver = new MutationObserver(schedule)
+          panelObserver.observe(panel, { subtree: true, childList: true, characterData: true })
+        }
+        const bodyObserver = new MutationObserver(() => {
+          const panel = document.querySelector(SETTINGS_PANEL_SELECTOR)
+          watchPanel(panel)
+          if (panel !== null) schedule()
+        })
+        bodyObserver.observe(document.body, { childList: true })
+        watchPanel(document.querySelector(SETTINGS_PANEL_SELECTOR))
+        schedule()
+        return () => {
+          settingsPluginCtx = null
+          requestSettingsNavSync = function () {}
+          bodyObserver.disconnect()
+          if (panelObserver !== null) panelObserver.disconnect()
+          if (frame !== 0) window.cancelAnimationFrame(frame)
+          for (const element of document.querySelectorAll('[' + SETTINGS_NAV_ATTRIBUTE + ']')) {
+            element.removeAttribute(SETTINGS_NAV_ATTRIBUTE)
+          }
+        }
+      } catch (err) {
+        console.warn('[fold-anything] settings nav sync skipped', err)
+        return () => {}
       }
     }
 
@@ -1092,9 +1125,7 @@ window.__ModuleLoader__.load({
      * @returns {boolean} whether a cell was clicked.
      */
     function openSettingsSection(label) {
-      const panel = document.querySelector(SETTINGS_PANEL_SELECTOR)
-      if (panel === null) return false
-      const nav = panel.querySelector('nav')
+      const nav = findSettingsNav()
       if (nav === null) return false
       const wanted = label.trim()
       const normalized = wanted.replace(/\s+/g, ' ')
@@ -1223,7 +1254,7 @@ window.__ModuleLoader__.load({
           openSettingsSection(item.label)
         },
       },
-      h(PanelIcon, { key: 'icon', component: iconById.get(item.id) }),
+      h(PanelIcon, { key: 'icon', component: iconById.get(item.id), fallback: h(SettingsFoldIcon, { size: 16 }) }),
       h('span', { className: 'dsh-fa-label' }, item.label),
       withSwitch
         ? h('span', {

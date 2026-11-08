@@ -154,6 +154,16 @@ More.
   renders a flat navigation with no group-header seat, so grouping would need
   injected section headers (a much more fragile DOM layer). Folding sections into
   the **更多设置** page is the supported-by-this-plugin alternative today.
+- **A folded active section loses the initial focus target.** The shell marks the
+  selected nav cell as its modal's autofocus target; when that section is folded
+  (hidden), the initial focus silently stays on the Settings opener. Tab still
+  reaches the panel through the modal's focus trap and Escape still closes it.
+- **Settings rows fall back to this bundle's glyph.** Shipped sections do not
+  register `settings.section.icon`, so a folded section shows this bundle's gear
+  glyph unless its own plugin registers a nav icon.
+- **Cross-tab changes are not live.** Folding is stored per browser; another tab
+  picks the change up on its next Settings open, not instantly (no `storage`
+  listener).
 - **The three plugin rows share one browser module.** A DSH package owns at most
   one browser module, and only a Loader row addressed by the exact package name
   publishes it: here that is the root row (`折叠 · 侧边栏入口`, package
@@ -167,20 +177,25 @@ More.
 
 ## Implementation
 
-- `cordis.patch.yml` inserts two rows: the package root (`dsh-fold-anything`,
-  the sidebar plugin) and the `./views` subpath plugin. The root row guarantees
-  the package's browser bundle is published.
-- `index.js` and `views/index.js` are empty Host `apply`s: the whole capability
-  is browser-side.
-- `client.js` registers into `sidebar.panellist.actions` and
-  `conversation.session.header.views.actions` only, and React is the only module
-  required; colors use `--dsw-alias-*` theme tokens. The optional startup replay
-  is the one exception to "no shipped DOM": it looks up the two shipped More
-  launchers, clicks them to mount their menus for a moment, and sets a temporary
-  root attribute that hides the menus while it runs. It never edits their
-  markup, their styles, or their state beyond that toggle.
-- `locale/*.json` and `views/locale/*.json` supply each plugin's manager title
-  and description; `icon.svg` and `views/icon.svg` are original artwork.
+- `cordis.patch.yml` inserts three rows: the package root (`dsh-fold-anything`,
+  the sidebar plugin), plus the `./views` and `./settings` subpath plugins. The
+  root row guarantees the package's browser bundle is published; the subpath rows
+  give the other two plugins their own title, description, and icon.
+- `index.js`, `views/index.js`, and `settings/index.js` are empty Host `apply`s:
+  the whole capability is browser-side.
+- `client.js` registers into `sidebar.panellist.actions`,
+  `conversation.session.header.views.actions`, `settings.section`, and
+  `settings.section.icon`; React is the only module required, and colors use
+  `--dsw-alias-*` theme tokens.
+- Two features touch the shipped DOM, both best effort and both unable to break
+  it: the **startup replay** clicks the two shipped More launchers (to mount the
+  menus that expose the pin callback) and hides them with a temporary root
+  attribute; the **settings fold** marks shipped settings nav cells with an
+  attribute (`display:none` only) and clicks one back when a folded section is
+  opened from its page. Neither edits shipped markup, styles, or private state.
+- `locale/*.json`, `views/locale/*.json`, and `settings/locale/*.json` supply
+  each plugin's manager title and description; `icon.svg`, `views/icon.svg`, and
+  `settings/icon.svg` are original artwork.
 
 ## Development
 

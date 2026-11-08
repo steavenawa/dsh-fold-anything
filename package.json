@@ -1,6 +1,6 @@
 {
   "name": "dsh-fold-anything",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "折叠一切 (Fold anything): one installable bundle with two plugins — fold left-sidebar entries and conversation view tabs into their More menu.",
   "type": "module",
   "license": "MIT",
