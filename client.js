@@ -71,6 +71,22 @@ window.__ModuleLoader__.load({
     /** The shipped tab row always keeps Chat outside More. */
     const ALWAYS_VISIBLE_VIEWS = ['chat']
 
+    /**
+     * Startup replay (best effort): after a page load the shell's pin sets are
+     * empty, so the controls' saved fold state has to be replayed before the
+     * user opens a menu. This marker attribute hides the menu that the replay
+     * opens for a couple of frames, so the sync stays invisible.
+     */
+    const SYNC_ATTRIBUTE = 'data-fold-anything-sync'
+
+    /** localStorage opt-out: set it to "1" to keep the startup replay off. */
+    const BOOT_REPLAY_DISABLE_KEY = 'dsh.fold-anything.no-boot-replay.v1'
+
+    /** Timing knobs for the startup replay: first try, retry, give up. */
+    const BOOT_REPLAY_DELAY_MS = 900
+    const BOOT_REPLAY_POLL_MS = 400
+    const BOOT_REPLAY_WINDOW_MS = 8000
+
     /** Copy for both plugins; English is the fallback dictionary. */
     const en = {
       'sidebar.title': 'Sidebar entries',
@@ -123,6 +139,8 @@ window.__ModuleLoader__.load({
       '.dsh-fa-foot{display:flex;justify-content:flex-end;gap:4px;padding:2px 6px 4px;}',
       '.dsh-fa-reset{padding:4px 8px;border:0;border-radius:6px;background:transparent;color:var(--dsw-alias-brand-primary);font:inherit;font-size:12px;cursor:pointer;}',
       '.dsh-fa-reset:hover{background:var(--dsw-alias-bg-layer-2);}',
+      'html[data-fold-anything-sync] [role="menu"]{visibility:hidden!important;pointer-events:none!important;}',
+      'html[data-fold-anything-sync] [role="dialog"][aria-modal="true"]{visibility:hidden!important;pointer-events:none!important;}',
       '@media (prefers-reduced-motion: reduce){.dsh-fa-switch,.dsh-fa-knob{transition:none;}}',
     ].join('')
 
@@ -304,6 +322,227 @@ window.__ModuleLoader__.load({
       const [value, setValue] = React.useState(() => store.get())
       React.useEffect(() => store.subscribe(() => setValue(store.get())), [store])
       return value
+    }
+
+    // --------------------------------------------------------- startup replay
+
+    /**
+     * Whether an element is laid out enough to receive a click.
+     * @param {Element | null | undefined} element - candidate.
+     * @returns {boolean} true when the element has a box.
+     */
+    function isVisibleElement(element) {
+      if (element === null || element === undefined) return false
+      const rect = element.getBoundingClientRect()
+      return rect.width > 0 && rect.height > 0
+    }
+
+    /**
+     * Resolve one label of a shipped locale namespace. The menu triggers carry
+     * no stable class or data attribute, but their accessible name comes from
+     * these dictionaries, which gives the selector chain a locale-independent
+     * anchor.
+     * @param {object} ctx - Client context with the locale service.
+     * @param {string} ns - shipped namespace, e.g. "sidebar".
+     * @param {string} key - dictionary key.
+     * @returns {string | undefined} the localized label, when resolvable.
+     */
+    function resolveShippedLabel(ctx, ns, key) {
+      try {
+        const bind = ctx.locale.bind(ns)
+        const text = bind(key)
+        if (typeof text !== 'string' || text.length === 0 || text === key) return undefined
+        return text
+      } catch {
+        return undefined
+      }
+    }
+
+    /**
+     * Find a visible button by its accessible name.
+     * @param {string} label - aria-label to match.
+     * @returns {HTMLButtonElement | null} the button.
+     */
+    function findMenuButtonByLabel(label) {
+      for (const button of document.querySelectorAll('button[aria-label][aria-haspopup="menu"]')) {
+        if (button.getAttribute('aria-label') !== label) continue
+        if (!isVisibleElement(button)) continue
+        return button
+      }
+      return null
+    }
+
+    /**
+     * Find the sidebar's More launcher. Strategies are tried in order of
+     * structural strength, because the shipped markup offers no stable class
+     * or data attribute for it:
+     * 1. the sidebar's only `<nav>` (the panel list) and its menu button;
+     * 2. the column that owns the `[data-sidebar-toggle]` control;
+     * 3. the localized "More" label from the shipped `sidebar` dictionary;
+     * 4. literal Chinese/English labels as a last resort.
+     * @param {object} ctx - Client context.
+     * @returns {HTMLButtonElement | null} the trigger, or null.
+     */
+    function findSidebarMoreTrigger(ctx) {
+      const inNav = document.querySelector('nav[aria-label] button[aria-haspopup="menu"]')
+      if (isVisibleElement(inNav)) return inNav
+      const toggle = document.querySelector('[data-sidebar-toggle]')
+      const column = toggle !== null ? toggle.parentElement?.parentElement ?? null : null
+      if (column !== null) {
+        const inColumn = column.querySelector('button[aria-haspopup="menu"]')
+        if (isVisibleElement(inColumn)) return inColumn
+      }
+      const labels = []
+      const localized = resolveShippedLabel(ctx, 'sidebar', 'panels.more')
+      if (localized !== undefined) labels.push(localized)
+      labels.push('更多', 'More')
+      for (const label of labels) {
+        const button = findMenuButtonByLabel(label)
+        if (button !== null) return button
+      }
+      return null
+    }
+
+    /**
+     * Find the View tab row's More launcher with the same layered fallback.
+     * @param {object} ctx - Client context.
+     * @returns {HTMLButtonElement | null} the trigger, or null.
+     */
+    function findViewsMoreTrigger(ctx) {
+      const labels = []
+      const localized = resolveShippedLabel(ctx, 'conversation', 'session.moreViews')
+      if (localized !== undefined) labels.push(localized)
+      labels.push('更多对话视图', 'More conversation views')
+      for (const label of labels) {
+        const button = findMenuButtonByLabel(label)
+        if (button !== null) return button
+      }
+      for (const selector of ['[data-conversation-tabs]', '[role="tablist"]']) {
+        const tablist = document.querySelector(selector)
+        const row = tablist !== null ? tablist.parentElement : null
+        if (row === null) continue
+        const button = row.querySelector('button[aria-haspopup="menu"]')
+        if (isVisibleElement(button)) return button
+      }
+      return null
+    }
+
+    /**
+     * Mount a More menu for a few frames, then close it: mounting is what runs
+     * the controls' replay effect, which pushes the saved fold state into the
+     * shell. {@link SYNC_ATTRIBUTE} keeps the menu invisible while that happens.
+     * @param {HTMLButtonElement} trigger - the menu's launcher.
+     * @param {() => void} done - called once the menu is closed again.
+     */
+    function replayThroughMenu(trigger, done) {
+      if (trigger.getAttribute('aria-expanded') === 'true') {
+        done()
+        return
+      }
+      const doc = document
+      const root = doc.documentElement
+      const previousFocus = doc.activeElement
+      root.setAttribute(SYNC_ATTRIBUTE, '')
+      let finished = false
+      const finish = () => {
+        if (finished) return
+        finished = true
+        try {
+          if (trigger.getAttribute('aria-expanded') === 'true') trigger.click()
+        } catch (err) {
+          console.warn('[fold-anything] could not close the replay menu', err)
+        }
+        window.setTimeout(() => {
+          root.removeAttribute(SYNC_ATTRIBUTE)
+          if (previousFocus !== null && previousFocus !== doc.body && typeof previousFocus.focus === 'function') {
+            try {
+              previousFocus.focus({ preventScroll: true })
+            } catch (err) {
+              console.warn('[fold-anything] could not restore focus after the replay', err)
+            }
+          }
+          done()
+        }, 60)
+      }
+      try {
+        trigger.click()
+      } catch (err) {
+        console.warn('[fold-anything] could not open the replay menu', err)
+        root.removeAttribute(SYNC_ATTRIBUTE)
+        done()
+        return
+      }
+      window.requestAnimationFrame(() => {
+        window.requestAnimationFrame(() => {
+          window.setTimeout(finish, 120)
+        })
+      })
+      window.setTimeout(finish, 1600)
+    }
+
+    /**
+     * Replay the persisted fold state right after startup instead of waiting for
+     * the first manual menu open. This is best effort by construction: the shell
+     * exposes its pin callback only through menu rows, so each menu is mounted
+     * invisibly for two frames. Every failure (missing trigger, changed markup,
+     * thrown error, page not ready) is swallowed — the plugin then falls back to
+     * replaying on the first manual menu open, exactly like before.
+     * @param {object} ctx - Client context.
+     * @returns {() => void} disposer for the pending timers.
+     */
+    function startBootReplay(ctx) {
+      let disabled
+      try {
+        disabled = window.localStorage.getItem(BOOT_REPLAY_DISABLE_KEY) === '1'
+      } catch {
+        disabled = false
+      }
+      if (disabled) return () => {}
+      const startedAt = Date.now()
+      const tasks = []
+      if (readFolded('sidebar').size > 0) {
+        tasks.push({ region: 'sidebar', done: false, deadline: startedAt + BOOT_REPLAY_WINDOW_MS })
+      }
+      if (readFolded('views').size > 0) {
+        tasks.push({ region: 'views', done: false, deadline: startedAt + BOOT_REPLAY_WINDOW_MS })
+      }
+      if (tasks.length === 0) return () => {}
+
+      let cancelled = false
+      let timer = 0
+      let busy = false
+      const schedule = () => {
+        if (cancelled) return
+        if (timer !== 0) window.clearTimeout(timer)
+        timer = window.setTimeout(poll, BOOT_REPLAY_POLL_MS)
+      }
+      const poll = () => {
+        timer = 0
+        if (cancelled || busy) return
+        const current = Date.now()
+        for (const task of tasks) {
+          if (task.done) continue
+          const trigger = task.region === 'views' ? findViewsMoreTrigger(ctx) : findSidebarMoreTrigger(ctx)
+          if (trigger === null) {
+            if (current >= task.deadline) task.done = true
+            continue
+          }
+          task.done = true
+          busy = true
+          replayThroughMenu(trigger, () => {
+            busy = false
+            if (tasks.some((item) => !item.done)) schedule()
+          })
+          return
+        }
+        if (tasks.some((task) => !task.done)) schedule()
+      }
+      timer = window.setTimeout(poll, BOOT_REPLAY_DELAY_MS)
+      return () => {
+        cancelled = true
+        if (timer !== 0) window.clearTimeout(timer)
+        document.documentElement.removeAttribute(SYNC_ATTRIBUTE)
+      }
     }
 
     // ------------------------------------------------------------- components
@@ -674,6 +913,11 @@ window.__ModuleLoader__.load({
       ctx.effect(() => panelStore.bind(ctx), 'fold-anything: panel icons')
       ctx.effect(() => viewStore.bind(ctx), 'fold-anything: view roster')
       ctx.effect(() => viewActionStore.bind(ctx), 'fold-anything: view menu rows')
+
+      // Best-effort startup replay: apply the saved fold state without waiting
+      // for the user to open a menu. Falls back to the menu-open replay when the
+      // shell markup moved or the page is not ready.
+      ctx.effect(() => startBootReplay(ctx), 'fold-anything: startup replay')
 
       // `slots.inject` waits for the shell to declare each slot, so this bundle
       // may load before or after the shell without a race.

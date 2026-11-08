@@ -73,8 +73,24 @@ More.
   key is migrated once from the earlier sidebar-only plugin
   (`dsh.sidebar-fold.folded.v1`).
 - The shell keeps its pin sets in page memory only, so after a reload every row
-  starts visible. Each plugin replays the saved choice through the shell's own
-  `onPinnedChange` callback the first time its menu opens after a reload.
+  starts visible. The plugin replays the saved choice through the shell's own
+  `onPinnedChange` callback: at startup (best effort, see below) and again on
+  the first manual menu open.
+- **Startup replay.** Right after a page load the plugin mounts each More menu
+  invisibly for two frames, which is the only way the shell exposes its pin
+  callback, then closes it again. The menu is hidden by a temporary
+  `html[data-fold-anything-sync]` rule, so the sync is not visible.
+  - The menu triggers carry no stable class or data attribute, so the plugin
+    resolves them through a fallback chain of selectors that survives shipped
+    markup drift: (1) structural anchors — the sidebar's only `<nav>`, the
+    `[data-sidebar-toggle]` column, `[data-conversation-tabs]` / `[role=tablist]`
+    siblings; (2) the localized trigger label resolved from the shipped `sidebar`
+    / `conversation` locale dictionaries (no hardcoded language); (3) literal
+    Chinese/English labels as a last resort.
+  - Any failure — anchor moved, label changed, page not ready, exception — is
+    swallowed. The plugin then simply falls back to the original behaviour:
+    replay on the first manual menu open. It can never break the menus.
+  - Opt out with `localStorage.setItem('dsh.fold-anything.no-boot-replay.v1', '1')`.
 - Panel icons are reused from the icons their own plugins register into
   `sidebar.panellist`; each is rendered behind an error boundary, so a hostile
   icon degrades to a neutral placeholder instead of breaking the menu.
@@ -87,8 +103,10 @@ More.
   shell region (`sidebar.workspaces`) that exposes only Session row action and
   menu seats — no row-level pin/fold seat, and no 更多 host for workspace rows.
   Adding one would require replacing the shipped browser.
-- **The reload replay happens at menu open**, not at page boot: the controls are
-  the only place the shell exposes its pin callback.
+- **The startup replay is best effort**, not a shell contract: it depends on the
+  shipped menu triggers' accessible names and structural anchors. If a DSH
+  release changes them, the plugin silently falls back to replaying on the first
+  manual menu open. A shell-exposed pin service would remove this dependency.
 - Stale ids (a folded panel whose plugin was removed) stay in `localStorage`
   until **全部显示** clears them; they are harmless.
 - **The two plugin rows share one browser module.** A DSH package owns at most
